@@ -86,6 +86,7 @@ module Paperclip
               (permission == :public_read) ? 'http' : 'https'
             end
           @s3_headers     = @options.s3_headers     || {}
+          @s3_headers     = @s3_headers.call(instance) if @s3_headers.is_a?(Proc)
 
           unless @options.url.to_s.match(/^:s3.*url$/) || @options.url == ":asset_host"
             @options.path         = @options.path.gsub(/:url/, @options.url).gsub(/^:rails_root\/public\/system/, '')
