@@ -46,7 +46,7 @@ module Paperclip
     # is used in the default :path to ease default specifications.
     RIGHT_HERE = "#{__FILE__.gsub(%r{^\./}, "")}:#{__LINE__ + 3}"
     def url attachment, style_name
-      raise InfiniteInterpolationError if caller.any?{|b| b.index(RIGHT_HERE) }
+      raise Errors::InfiniteInterpolationError if caller.any?{|b| b.index(RIGHT_HERE) }
       attachment.url(style_name, :timestamp => false, :escape => false)
     end
 
@@ -93,13 +93,16 @@ module Paperclip
     # If the style has a format defined, it will return the format instead
     # of the actual extension.
     def extension attachment, style_name
-      ((style = attachment.styles[style_name]) && style[:format]) ||
+      ((style = attachment.styles[style_name.to_s.to_sym]) && style[:format]) ||
         File.extname(attachment.original_filename).gsub(/^\.+/, "")
     end
 
-    # Returns an extension based on the content type. e.g. "jpeg" for "image/jpeg".
+    # Returns an extension based on the content type. e.g. "jpeg" for
+    # "image/jpeg". If the style has a specified format, it will override the
+    # content-type detection.
+    #
     # Each mime type generally has multiple extensions associated with it, so
-    # if the extension from teh original filename is one of these extensions,
+    # if the extension from the original filename is one of these extensions,
     # that extension is used, otherwise, the first in the list is used.
     def content_type_extension attachment, style_name
       mime_type = MIME::Types[attachment.content_type]
@@ -110,7 +113,10 @@ module Paperclip
       end
 
       original_extension = extension(attachment, style_name)
-      if extensions_for_mime_type.include? original_extension
+      style = attachment.styles[style_name.to_s.to_sym]
+      if style && style[:format]
+        style[:format].to_s
+      elsif extensions_for_mime_type.include? original_extension
         original_extension
       elsif !extensions_for_mime_type.empty?
         extensions_for_mime_type.first
@@ -137,11 +143,11 @@ module Paperclip
       attachment.fingerprint
     end
 
-    # Returns a the attachment hash.  See Paperclip::Attachment#hash for
+    # Returns a the attachment hash.  See Paperclip::Attachment#hash_key for
     # more details.
     def hash attachment=nil, style_name=nil
       if attachment && style_name
-        attachment.hash(style_name)
+        attachment.hash_key(style_name)
       else
         super()
       end

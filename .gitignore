@@ -3,6 +3,7 @@
 .rvmrc
 .bundle
 tmp
+.DS_Store
 
 test/s3.yml
 test/debug.log
@@ -20,3 +21,4 @@ capybara*.html
 
 *SPIKE*
 *emfile.lock
+tags

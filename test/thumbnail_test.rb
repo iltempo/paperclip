@@ -7,6 +7,8 @@ class ThumbnailTest < Test::Unit::TestCase
       @tempfile = Paperclip::Tempfile.new(["file", ".jpg"])
     end
 
+    teardown { @tempfile.close }
+
     should "have its path contain a real extension" do
       assert_equal ".jpg", File.extname(@tempfile.path)
     end
@@ -21,6 +23,8 @@ class ThumbnailTest < Test::Unit::TestCase
       @tempfile = Paperclip::Tempfile.new("file")
     end
 
+    teardown { @tempfile.close }
+
     should "not have an extension if not given one" do
       assert_equal "", File.extname(@tempfile.path)
     end
@@ -32,7 +36,7 @@ class ThumbnailTest < Test::Unit::TestCase
 
   context "An image" do
     setup do
-      @file = File.new(File.join(File.dirname(__FILE__), "fixtures", "5k.png"), 'rb')
+      @file = File.new(fixture_file("5k.png"), 'rb')
     end
 
     teardown { @file.close }
@@ -77,8 +81,10 @@ class ThumbnailTest < Test::Unit::TestCase
         old_path = ENV['PATH']
         begin
           ENV['PATH'] = ''
-          assert_raises(Paperclip::CommandNotFoundError) do
-            @thumb.make
+          assert_raises(Paperclip::Errors::CommandNotFoundError) do
+            silence_stream(STDERR) do
+              @thumb.make
+            end
           end
         ensure
           ENV['PATH'] = old_path
@@ -107,10 +113,9 @@ class ThumbnailTest < Test::Unit::TestCase
       end
 
       should "send the right command to convert when sent #make" do
-        Paperclip.expects(:run).with do |*arg|
-          arg[0] == 'convert' &&
-          arg[1] == ':source -resize "x50" -crop "100x50+114+0" +repage :dest' &&
-          arg[2][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
+        @thumb.expects(:convert).with do |*arg|
+          arg[0] == ':source -resize "x50" -crop "100x50+114+0" +repage :dest' &&
+          arg[1][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
         end
         @thumb.make
       end
@@ -133,10 +138,9 @@ class ThumbnailTest < Test::Unit::TestCase
       end
 
       should "send the right command to convert when sent #make" do
-        Paperclip.expects(:run).with do |*arg|
-          arg[0] == 'convert' &&
-          arg[1] == '-strip :source -resize "x50" -crop "100x50+114+0" +repage :dest' &&
-          arg[2][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
+        @thumb.expects(:convert).with do |*arg|
+          arg[0] == '-strip :source -resize "x50" -crop "100x50+114+0" +repage :dest' &&
+          arg[1][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
         end
         @thumb.make
       end
@@ -154,8 +158,10 @@ class ThumbnailTest < Test::Unit::TestCase
         end
 
         should "error when trying to create the thumbnail" do
-          assert_raises(Paperclip::PaperclipError) do
-            @thumb.make
+          assert_raises(Paperclip::Error) do
+            silence_stream(STDERR) do
+              @thumb.make
+            end
           end
         end
       end
@@ -173,10 +179,9 @@ class ThumbnailTest < Test::Unit::TestCase
       end
 
       should "send the right command to convert when sent #make" do
-        Paperclip.expects(:run).with do |*arg|
-          arg[0] == 'convert' &&
-          arg[1] == ':source -resize "x50" -crop "100x50+114+0" +repage -strip -depth 8 :dest' &&
-          arg[2][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
+        @thumb.expects(:convert).with do |*arg|
+          arg[0] == ':source -resize "x50" -crop "100x50+114+0" +repage -strip -depth 8 :dest' &&
+          arg[1][:source] == "#{File.expand_path(@thumb.file.path)}[0]"
         end
         @thumb.make
       end
@@ -194,8 +199,10 @@ class ThumbnailTest < Test::Unit::TestCase
         end
 
         should "error when trying to create the thumbnail" do
-          assert_raises(Paperclip::PaperclipError) do
-            @thumb.make
+          assert_raises(Paperclip::Error) do
+            silence_stream(STDERR) do
+              @thumb.make
+            end
           end
         end
 
@@ -203,8 +210,10 @@ class ThumbnailTest < Test::Unit::TestCase
           old_path = ENV['PATH']
           begin
             ENV['PATH'] = ''
-            assert_raises(Paperclip::CommandNotFoundError) do
-              @thumb.make
+            assert_raises(Paperclip::Errors::CommandNotFoundError) do
+              silence_stream(STDERR) do
+                @thumb.make
+              end
             end
           ensure
             ENV['PATH'] = old_path
@@ -225,12 +234,28 @@ class ThumbnailTest < Test::Unit::TestCase
       end
     end
 
+    context "being thumbnailed with default animated option (true)" do
+      should "call identify to check for animated images when sent #make" do
+        thumb = Paperclip::Thumbnail.new(@file, :geometry => "100x50#")
+        thumb.expects(:identify).at_least_once.with do |*arg|
+          arg[0] == '-format %m :file' &&
+          arg[1][:file] == "#{File.expand_path(thumb.file.path)}[0]"
+        end
+        thumb.make
+      end
+    end
+
     context "passing a custom file geometry parser" do
+      teardown do
+        self.class.send(:remove_const, :GeoParser)
+      end
+
       should "produce the appropriate transformation_command" do
         GeoParser = Class.new do
           def self.from_file(file)
             new
           end
+
           def transformation_to(target, should_crop)
             ["SCALE", "CROP"]
           end
@@ -252,6 +277,10 @@ class ThumbnailTest < Test::Unit::TestCase
     end
 
     context "passing a custom geometry string parser" do
+      teardown do
+        self.class.send(:remove_const, :GeoParser)
+      end
+
       should "produce the appropriate transformation_command" do
         GeoParser = Class.new do
           def self.parse(s)
@@ -275,7 +304,7 @@ class ThumbnailTest < Test::Unit::TestCase
 
   context "A multipage PDF" do
     setup do
-      @file = File.new(File.join(File.dirname(__FILE__), "fixtures", "twopage.pdf"), 'rb')
+      @file = File.new(fixture_file("twopage.pdf"), 'rb')
     end
 
     teardown { @file.close }
@@ -308,7 +337,7 @@ class ThumbnailTest < Test::Unit::TestCase
 
   context "An animated gif" do
     setup do
-      @file = File.new(File.join(File.dirname(__FILE__), "fixtures", "animated.gif"), 'rb')
+      @file = File.new(fixture_file("animated.gif"), 'rb')
     end
 
     teardown { @file.close }
@@ -355,6 +384,40 @@ class ThumbnailTest < Test::Unit::TestCase
         dst = @thumb.make
         cmd = %Q[identify -format "%wx%h" "#{dst.path}"]
         assert_equal "50x50"*12, `#{cmd}`.chomp
+      end
+
+      should "use the -coalesce option" do
+        assert_equal @thumb.transformation_command.first, "-coalesce"
+      end
+    end
+
+    context "with unidentified source format" do
+      setup do
+        @unidentified_file = File.new(fixture_file("animated.unknown"), 'rb')
+        @thumb = Paperclip::Thumbnail.new(@file, :geometry => "60x60")
+      end
+
+      should "create the 12 frames thumbnail when sent #make" do
+        dst = @thumb.make
+        cmd = %Q[identify -format "%wx%h" "#{dst.path}"]
+        assert_equal "60x60"*12, `#{cmd}`.chomp
+      end
+
+      should "use the -coalesce option" do
+        assert_equal @thumb.transformation_command.first, "-coalesce"
+      end
+    end
+
+    context "with no source format" do
+      setup do
+        @unidentified_file = File.new(fixture_file("animated"), 'rb')
+        @thumb = Paperclip::Thumbnail.new(@file, :geometry => "70x70")
+      end
+
+      should "create the 12 frames thumbnail when sent #make" do
+        dst = @thumb.make
+        cmd = %Q[identify -format "%wx%h" "#{dst.path}"]
+        assert_equal "70x70"*12, `#{cmd}`.chomp
       end
 
       should "use the -coalesce option" do

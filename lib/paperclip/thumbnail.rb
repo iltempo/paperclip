@@ -44,7 +44,6 @@ module Paperclip
 
       @current_format      = File.extname(@file.path)
       @basename            = File.basename(@file.path, @current_format)
-
     end
 
     # Returns true if the +target_geometry+ is meant to crop.
@@ -74,11 +73,11 @@ module Paperclip
 
         parameters = parameters.flatten.compact.join(" ").strip.squeeze(" ")
 
-        success = Paperclip.run("convert", parameters, :source => "#{File.expand_path(src.path)}#{'[0]' unless animated?}", :dest => File.expand_path(dst.path))
+        success = convert(parameters, :source => "#{File.expand_path(src.path)}#{'[0]' unless animated?}", :dest => File.expand_path(dst.path))
       rescue Cocaine::ExitStatusError => e
-        raise PaperclipError, "There was an error processing the thumbnail for #{@basename}" if @whiny
+        raise Paperclip::Error, "There was an error processing the thumbnail for #{@basename}" if @whiny
       rescue Cocaine::CommandNotFoundError => e
-        raise Paperclip::CommandNotFoundError.new("Could not run the `convert` command. Please install ImageMagick.")
+        raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `convert` command. Please install ImageMagick.")
       end
 
       dst
@@ -99,7 +98,16 @@ module Paperclip
 
     # Return true if the format is animated
     def animated?
-      @animated && ANIMATED_FORMATS.include?(@current_format[1..-1]) && (ANIMATED_FORMATS.include?(@format.to_s) || @format.blank?)
+      @animated && (ANIMATED_FORMATS.include?(@format.to_s) || @format.blank?)  && identified_as_animated?
+    end
+
+    # Return true if ImageMagick's +identify+ returns an animated format
+    def identified_as_animated?
+      ANIMATED_FORMATS.include? identify("-format %m :file", :file => "#{@file.path}[0]").to_s.downcase.strip
+    rescue Cocaine::ExitStatusError => e
+      raise Paperclip::Error, "There was an error running `identify` for #{@basename}" if @whiny
+    rescue Cocaine::CommandNotFoundError => e
+      raise Paperclip::Errors::CommandNotFoundError.new("Could not run the `identify` command. Please install ImageMagick.")
     end
   end
 end

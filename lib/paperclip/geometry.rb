@@ -17,16 +17,18 @@ module Paperclip
     # a Tempfile object, which would be eligible for file deletion when no longer referenced.
     def self.from_file file
       file_path = file.respond_to?(:path) ? file.path : file
-      raise(Paperclip::NotIdentifiedByImageMagickError.new("Cannot find the geometry of a file with a blank name")) if file_path.blank?
+      raise(Errors::NotIdentifiedByImageMagickError.new("Cannot find the geometry of a file with a blank name")) if file_path.blank?
       geometry = begin
-                   Paperclip.run("identify", "-format %wx%h :file", :file => "#{file_path}[0]")
+                   silence_stream(STDERR) do
+                     Paperclip.run("identify", "-format %wx%h :file", :file => "#{file_path}[0]")
+                   end
                  rescue Cocaine::ExitStatusError
                    ""
                  rescue Cocaine::CommandNotFoundError => e
-                   raise Paperclip::CommandNotFoundError.new("Could not run the `identify` command. Please install ImageMagick.")
+                   raise Errors::CommandNotFoundError.new("Could not run the `identify` command. Please install ImageMagick.")
                  end
       parse(geometry) ||
-        raise(NotIdentifiedByImageMagickError.new("#{file_path} is not recognized by the 'identify' command."))
+        raise(Errors::NotIdentifiedByImageMagickError.new("#{file_path} is not recognized by the 'identify' command."))
     end
 
     # Parses a "WxH" formatted string, where W is the width and H is the height.
@@ -99,6 +101,33 @@ module Paperclip
       [ scale_geometry, crop_geometry ]
     end
 
+    # resize to a new geometry
+    # @param geometry [String] the Paperclip geometry definition to resize to
+    # @example
+    #   Paperclip::Geometry.new(150, 150).resize_to('50x50!')
+    #   #=> Paperclip::Geometry(50, 50)
+    def resize_to(geometry)
+      new_geometry = Paperclip::Geometry.parse geometry
+      case new_geometry.modifier
+      when '!', '#'
+        new_geometry
+      when '>'
+        if new_geometry.width >= self.width && new_geometry.height >= self.height
+          self
+        else
+          scale_to new_geometry
+        end
+      when '<'
+        if new_geometry.width <= self.width || new_geometry.height <= self.height
+          self
+        else
+          scale_to new_geometry
+        end
+      else
+        scale_to new_geometry
+      end
+    end
+
     private
 
     def scaling dst, ratio
@@ -115,6 +144,12 @@ module Paperclip
       else
         "%dx%d+%d+%d" % [ dst.width, dst.height, (self.width * scale - dst.width) / 2, 0 ]
       end
+    end
+
+    # scale to the requested geometry and preserve the aspect ratio
+    def scale_to(new_geometry)
+      scale = [new_geometry.width.to_f / self.width.to_f , new_geometry.height.to_f / self.height.to_f].min
+      Paperclip::Geometry.new((self.width * scale).round, (self.height * scale).round)
     end
   end
 end

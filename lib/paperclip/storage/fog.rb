@@ -42,7 +42,7 @@ module Paperclip
 
         base.instance_eval do
           unless @options[:url].to_s.match(/^:fog.*url$/)
-            @options[:path]  = @options[:path].gsub(/:url/, @options[:url])
+            @options[:path]  = @options[:path].gsub(/:url/, @options[:url]).gsub(/^:rails_root\/public\/system\//, '')
             @options[:url]   = ':fog_public_url'
           end
           Paperclip.interpolates(:fog_public_url) do |attachment, style|
@@ -80,15 +80,18 @@ module Paperclip
           retried = false
           begin
             directory.files.create(fog_file.merge(
-              :body   => file,
-              :key    => path(style),
-              :public => fog_public
+              :body         => file,
+              :key          => path(style),
+              :public       => fog_public,
+              :content_type => file.content_type
             ))
           rescue Excon::Errors::NotFound
             raise if retried
             retried = true
             directory.save
             retry
+          ensure
+            file.rewind
           end
         end
 
@@ -105,40 +108,26 @@ module Paperclip
         @queued_for_delete = []
       end
 
-      # Returns representation of the data of the file assigned to the given
-      # style, in the format most representative of the current storage.
-      def to_file(style = default_style)
-        if @queued_for_write[style]
-          @queued_for_write[style]
-        else
-          body      = directory.files.get(path(style)).body
-          filename  = path(style)
-          extname   = File.extname(filename)
-          basename  = File.basename(filename, extname)
-          file      = Tempfile.new([basename, extname])
-          file.binmode
-          file.write(body)
-          file.rewind
-          file
-        end
-      end
-
       def public_url(style = default_style)
         if @options[:fog_host]
-          host = (@options[:fog_host] =~ /%d/) ? @options[:fog_host] % (path(style).hash % 4) : @options[:fog_host]
-          "#{host}/#{path(style)}"
+          "#{dynamic_fog_host_for_style(style)}/#{path(style)}"
         else
           if fog_credentials[:provider] == 'AWS'
-            if @options[:fog_directory].to_s =~ Fog::AWS_BUCKET_SUBDOMAIN_RESTRICTON_REGEX
-              "https://#{@options[:fog_directory]}.s3.amazonaws.com/#{path(style)}"
-            else
-              # directory is not a valid subdomain, so use path style for access
-              "https://s3.amazonaws.com/#{@options[:fog_directory]}/#{path(style)}"
-            end
+            "https://#{host_name_for_directory}/#{path(style)}"
           else
             directory.files.new(:key => path(style)).public_url
           end
         end
+      end
+
+      def expiring_url(time = (Time.now + 3600), style = default_style)
+        expiring_url = directory.files.get_http_url(path(style), time)
+
+        if @options[:fog_host]
+          expiring_url.gsub!(/#{host_name_for_directory}/, dynamic_fog_host_for_style(style))
+        end
+
+        return expiring_url
       end
 
       def parse_credentials(creds)
@@ -147,7 +136,34 @@ module Paperclip
         (creds[env] || creds).symbolize_keys
       end
 
+      def copy_to_local_file(style, local_dest_path)
+        log("copying #{path(style)} to local file #{local_dest_path}")
+        local_file = ::File.open(local_dest_path, 'wb')
+        file = directory.files.get(path(style))
+        local_file.write(file.body)
+        local_file.close
+      rescue ::Fog::Errors::Error => e
+        warn("#{e} - cannot copy #{path(style)} to local file #{local_dest_path}")
+        false
+      end
+
       private
+
+      def dynamic_fog_host_for_style(style)
+        if @options[:fog_host].respond_to?(:call)
+          @options[:fog_host].call(self)
+        else
+          (@options[:fog_host] =~ /%d/) ? @options[:fog_host] % (path(style).hash % 4) : @options[:fog_host]
+        end
+      end
+
+      def host_name_for_directory
+        if @options[:fog_directory].to_s =~ Fog::AWS_BUCKET_SUBDOMAIN_RESTRICTON_REGEX
+          "#{@options[:fog_directory]}.s3.amazonaws.com"
+        else
+          "s3.amazonaws.com/#{@options[:fog_directory]}"
+        end
+      end
 
       def find_credentials(creds)
         case creds
@@ -158,7 +174,11 @@ module Paperclip
         when Hash
           creds
         else
-          raise ArgumentError, "Credentials are not a path, file, or hash."
+          if creds.respond_to?(:call)
+            creds.call(self)
+          else
+            raise ArgumentError, "Credentials are not a path, file, hash or proc."
+          end
         end
       end
 
@@ -167,7 +187,13 @@ module Paperclip
       end
 
       def directory
-        @directory ||= connection.directories.new(:key => @options[:fog_directory])
+        dir = if @options[:fog_directory].respond_to?(:call)
+          @options[:fog_directory].call(self)
+        else
+          @options[:fog_directory]
+        end
+
+        @directory ||= connection.directories.new(:key => dir)
       end
     end
   end
